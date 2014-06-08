@@ -1,0 +1,16 @@
+<LinearLayout xmlns:tools="http://schemas.android.com/tools"
+    android:orientation="vertical"
+    android:layout_width="fill_parent"
+    android:layout_height="fill_parent"
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:clickable="false">
+    <ListView android:id="@+id/ListView01"
+        android:layout_width="match_parent"
+        android:clickable="true"
+        android:choiceMode="multipleChoice"
+        android:focusable="true"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        tools:listitem="@android:layout/simple_list_item_multiple_choice">
+    </ListView>
+</LinearLayout>
