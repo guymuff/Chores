@@ -9,7 +9,12 @@ import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.util.Log;
 
+import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.ConcurrentSkipListSet;
 
 /**
  * Created by Arch Stanton on 9/22/13.
@@ -28,7 +33,7 @@ public class DBManager extends SQLiteOpenHelper {
         super.onConfigure(db);
         db.setForeignKeyConstraintsEnabled(true);
     }
-//DELETE FROM todays_chores WHERE chore_fk NOT IN (16, 27);
+
     @Override
     public void onCreate(SQLiteDatabase sqLiteDatabase) {
         Log.d(MainActivity.TAG, "Bootstrapping db");
@@ -94,6 +99,7 @@ public class DBManager extends SQLiteOpenHelper {
             putChoreInDB("Oil window and door hinges.", Frequency.YEARLY, sqLiteDatabase, rand, now);
 
             sqLiteDatabase.execSQL("CREATE TABLE todays_chores (chore_fk INTEGER REFERENCES chore(id), previous_time INTEGER);");
+            Log.d(MainActivity.TAG, "Bootstrapping db complete");
         } catch (SQLException ex) {
             Log.e(MainActivity.TAG, ex.getMessage(), ex);
         }
@@ -110,8 +116,12 @@ public class DBManager extends SQLiteOpenHelper {
         db.insertOrThrow("chore", null, contentValues);
     }
 
-    protected long nextLong(Frequency freq, Random rand, long now) {
-        return now - ((long) Math.floor(rand.nextDouble() * freq.millis));
+    public long nextLong(Frequency freq, Random rand, long now) {
+        return nextLong(freq.millis, rand, now);
+    }
+
+    public long nextLong(long freq, Random rand, long now) {
+        return now - ((long) Math.floor(rand.nextDouble() * freq));// - Frequency.WEEKLY.millis;
     }
 
     @Override
@@ -160,16 +170,23 @@ public class DBManager extends SQLiteOpenHelper {
     }
 
     public void updateCompletionTime(Chore c) {
+        updateLastCompleted(c);
+
         SQLiteDatabase db = getWritableDatabase();
-        ContentValues contentValues = new ContentValues();
-        contentValues.put("last_completed", c.lastCompleted);
         String[] id = new String[1];
         id[0] = Long.toString(c.id);
-        db.update("chore", contentValues, "id = ?", id);
-
-        contentValues = new ContentValues();
+        ContentValues contentValues = new ContentValues();
         contentValues.put("previous_time", c.previousTime);
         db.update("todays_chores", contentValues, "chore_fk = ?", id);
+    }
+
+    public void updateLastCompleted(Chore c) {
+        SQLiteDatabase db = getWritableDatabase();
+        String[] id = new String[1];
+        id[0] = Long.toString(c.id);
+        ContentValues contentValues = new ContentValues();
+        contentValues.put("last_completed", c.lastCompleted);
+        db.update("chore", contentValues, "id = ?", id);
     }
 
     public void clearTodays() {
@@ -177,17 +194,21 @@ public class DBManager extends SQLiteOpenHelper {
         db.delete("todays_chores", null, null);
     }
 
-    public void updateTodays(Chore chore) {
+    public void updateTodays(Chore chore, long prev) {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues contentValues = new ContentValues();
         contentValues.put("chore_fk", chore.id);
-        contentValues.put("previous_time", 0);
+        contentValues.put("previous_time", prev);
 
         db.insertOrThrow("todays_chores", null, contentValues);
     }
 
+    public void updateTodays(Chore chore) {
+        updateTodays(chore, 0);
+    }
 
-    public Chore[] getTodaysChores() {
+
+    public Set<Chore> getTodaysChores() {
         SQLiteDatabase db = getReadableDatabase();
 
         String query = "SELECT * " +
@@ -196,7 +217,7 @@ public class DBManager extends SQLiteOpenHelper {
         Cursor cursor = db.rawQuery(query, null);
 
         int rows = cursor.getCount();
-        Chore[] ret = new Chore[rows];
+        Set<Chore> ret = new ConcurrentSkipListSet<Chore>();
 
         int idIdx = cursor.getColumnIndexOrThrow("id");
         int nameIdx = cursor.getColumnIndexOrThrow("name");
@@ -206,12 +227,14 @@ public class DBManager extends SQLiteOpenHelper {
 
         cursor.moveToFirst();
         for (int i = 0; i < rows; i++) {
-            ret[i] = new Chore();
-            ret[i].id = cursor.getLong(idIdx);
-            ret[i].name = cursor.getString(nameIdx);
-            ret[i].frequency = cursor.getLong(freqIdx);
-            ret[i].lastCompleted = cursor.getLong(lastIdx);
-            ret[i].previousTime = cursor.getLong(prevIdx);
+            Chore c = new Chore();
+            c.id = cursor.getLong(idIdx);
+            c.name = cursor.getString(nameIdx);
+            c.frequency = cursor.getLong(freqIdx);
+            c.lastCompleted = cursor.getLong(lastIdx);
+            c.previousTime = cursor.getLong(prevIdx);
+            ret.add(c);
+
             cursor.moveToNext();
         }
         return ret;

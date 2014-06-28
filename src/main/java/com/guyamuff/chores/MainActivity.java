@@ -7,6 +7,8 @@ import android.database.DataSetObserver;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AbsListView;
@@ -17,19 +19,19 @@ import android.widget.TextView;
 
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Date;
-import java.util.List;
+import java.util.HashSet;
 import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.ConcurrentSkipListSet;
 
 public class MainActivity extends Activity {
     static final String TAG = "Chore Scheduler";
     static final double MAGIC_SCALER = Math.log(4.0);
+    static final String LAST_RUN = "last_run";
 
 
     ListView lView;
-    List<Chore> selected;
     ArrayAdapter<Chore> arrayAdapter;
     DBManager dbManager;
     SharedPreferences sharedPreferences;
@@ -40,14 +42,14 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        selected = new ArrayList<Chore>();
         lView = (ListView) findViewById(R.id.ListView01);
-        //arrayAdapter = new ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice);
+
         arrayAdapter = new MultilineAdapter(this, android.R.layout.simple_list_item_multiple_choice);
         arrayAdapter.registerDataSetObserver(new ChoreObserver());
         lView.setAdapter(arrayAdapter);
         lView.setOnItemClickListener(new ClickListener());
         sharedPreferences = getPreferences(Context.MODE_PRIVATE);
+        editor = sharedPreferences.edit();
         dateFormat = new SimpleDateFormat("yyyy-MM-dd");
 
         new GenerateChoresTask().execute();
@@ -56,7 +58,9 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
-        return false;
+        MenuInflater inflater = getMenuInflater();
+        inflater.inflate(R.menu.main, menu);
+        return true;
     }
 
     @Override
@@ -87,6 +91,20 @@ public class MainActivity extends Activity {
         return 1 / (1 + Math.exp(MAGIC_SCALER * daysUntilDue));
     }
 
+    String getLastRun() {
+        return sharedPreferences.getString(LAST_RUN, dateFormat.format(new Date(0)));
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case R.id.reset:
+                new ResetChoresTask().execute();
+                return true;
+            default:
+                return super.onOptionsItemSelected(item);
+        }
+    }
 
     private class ChoreObserver extends DataSetObserver {
 
@@ -94,8 +112,8 @@ public class MainActivity extends Activity {
         public void onChanged() {
             super.onChanged();
 
-            for(int i=0; i<arrayAdapter.getCount(); i++) {
-                if(arrayAdapter.getItem(i).previousTime > 0) {
+            for (int i = 0; i < arrayAdapter.getCount(); i++) {
+                if (arrayAdapter.getItem(i).previousTime > 0) {
                     lView.setItemChecked(i, true);
                 }
             }
@@ -114,6 +132,16 @@ public class MainActivity extends Activity {
 
     private class GenerateChoresTask extends AsyncTask<Void, Void, Void> {
 
+        Set<Chore> selectedChores;
+
+        private GenerateChoresTask(Set<Chore> selectedChores) {
+            this.selectedChores = selectedChores;
+        }
+
+        private GenerateChoresTask() {
+            this(new ConcurrentSkipListSet<Chore>());
+        }
+
         @Override
         protected Void doInBackground(Void... voids) {
             dbManager = new DBManager(getApplicationContext());
@@ -122,38 +150,46 @@ public class MainActivity extends Activity {
             String last_ran = getLastRun();
 
             if (today.equals(last_ran)) {
-                Chore[] chores = dbManager.getTodaysChores();
-                selected = Arrays.asList(chores);
+                selectedChores.addAll(dbManager.getTodaysChores());
             } else {
                 dbManager.clearTodays();
+
+                for(Chore chore : selectedChores) {
+                    dbManager.updateTodays(chore, chore.previousTime);
+                }
 
                 Chore[] chores = dbManager.queryChores();
                 long now = System.currentTimeMillis();
                 Random rand = new Random();
                 for (Chore chore : chores) {
                     if (doChore(chore, now, rand)) {
-                        selected.add(chore);
-                        dbManager.updateTodays(chore);
+                        boolean newAddition = selectedChores.add(chore);
+                        if(newAddition) {
+                            dbManager.updateTodays(chore);
+                        }
                     }
                 }
 
-                editor = sharedPreferences.edit();
-                editor.putString("last_run", today);
+                editor.putString(LAST_RUN, today);
             }
 
             return null;
         }
 
         @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+
+            lView.clearChoices();
+            arrayAdapter.clear();
+        }
+
+        @Override
         protected void onPostExecute(Void aVoid) {
             super.onPostExecute(aVoid);
 
-            arrayAdapter.addAll(selected);
+            arrayAdapter.addAll(selectedChores);
         }
-    }
-
-    String getLastRun() {
-        return sharedPreferences.getString("last_run", dateFormat.format(new Date(0)));
     }
 
     class MultilineAdapter extends ArrayAdapter {
@@ -173,6 +209,51 @@ public class MainActivity extends Activity {
             ret.setLayoutParams(lp);
 
             return ret;
+        }
+    }
+
+    private class ResetChoresTask extends AsyncTask<Void, Void, Void> {
+
+        Set<Chore> todaysChores;
+        Set<Chore> selectedChores;
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+
+            todaysChores = new ConcurrentSkipListSet<Chore>();
+            for(int i=0; i<arrayAdapter.getCount(); i++) {
+                Chore c = arrayAdapter.getItem(i);
+                todaysChores.add(c);
+            }
+        }
+
+        @Override
+        protected Void doInBackground(Void... params) {
+            Random rand = new Random();
+            long now = System.currentTimeMillis();
+            selectedChores = new ConcurrentSkipListSet<Chore>();
+
+            for(Chore c : todaysChores) {
+                if(c.isCompletedToday()) {
+                    selectedChores.add(c);
+                } else {
+                    c.lastCompleted = dbManager.nextLong(c.frequency, rand, now);
+                    dbManager.updateLastCompleted(c);
+                }
+            }
+
+            dbManager.clearTodays();
+            editor.remove(LAST_RUN);
+            editor.commit();
+            return null;
+        }
+
+        @Override
+        protected void onPostExecute(Void avoid) {
+            super.onPostExecute(avoid);
+
+            new GenerateChoresTask(selectedChores).execute();
         }
     }
 }
